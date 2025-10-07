@@ -1,0 +1,1 @@
+{"name":"my-bot","version":"1.0.0","description":"WhatsApp Bot using open-wa","main":"index.js","scripts":{"start":"node index.js"},"author":"cavineotii","license":"MIT","dependencies":{"@open-wa/wa-automate":"^4.76.0","express":"^4.18.2","firebase-admin":"^13.5.0","puppeteer":"^24.23.0"},"engines":{"node":"18.x"}}
