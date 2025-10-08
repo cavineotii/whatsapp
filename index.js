@@ -3,14 +3,15 @@ const { create } = require("@open-wa/wa-automate");
 const puppeteer = require("puppeteer");
 const admin = require("firebase-admin");
 const path = require("path");
-const fs = require("fs");
+const qrcode = require("qrcode-terminal"); // ✅ QR in console
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware to handle JSON requests
 app.use(express.json());
 
-// ---------- FIREBASE INITIALIZATION ----------
+/* ------------------ FIREBASE INITIALIZATION ------------------ */
 const serviceAccountPath =
   process.env.GOOGLE_APPLICATION_CREDENTIALS ||
   path.join(__dirname, "ServiceAccountKey.json");
@@ -24,43 +25,26 @@ try {
   console.error("❌ Firebase initialization failed:", err);
 }
 
-// ---------- EXPRESS ROUTE ----------
+/* ------------------ EXPRESS SERVER ------------------ */
 app.get("/", (req, res) => res.send("✅ WhatsApp bot is running on Render"));
 
 let clientInstance = null;
+
+// Message queue for pending messages
 let messageQueue = [];
 
-// ---------- SESSION MANAGEMENT ----------
-const SESSION_FILE = path.join(__dirname, "session_data/session.json");
-
-// Load existing session data if available
-function loadSessionData() {
-  if (fs.existsSync(SESSION_FILE)) {
-    console.log("📂 Existing session data found.");
-    return require(SESSION_FILE);
-  }
-  console.log("⚠️ No previous session found, new login required.");
-  return null;
-}
-
-// Save session data to file
-function saveSessionData(data) {
-  fs.writeFileSync(SESSION_FILE, JSON.stringify(data));
-  console.log("💾 Session data saved!");
-}
-
-// ---------- WHATSAPP CLIENT INITIALIZATION ----------
+/* ------------------ WHATSAPP AUTOMATE SETUP ------------------ */
 (async () => {
   const executablePath = puppeteer.executablePath();
 
   create({
     sessionId: "render-bot",
-    sessionData: loadSessionData(),
+    sessionDataPath: "./IGNORE_Session",
     multiDevice: true,
     headless: true,
     useChrome: true,
     executablePath,
-    restartOnCrash: start,
+    qrTimeout: 0, // Never time out QR
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -73,20 +57,18 @@ function saveSessionData(data) {
     .catch((err) => console.error("❌ Error launching browser:", err));
 })();
 
-// ---------- BOT START ----------
+/* ------------------ BOT LOGIC ------------------ */
 function start(client) {
+  console.log("🤖 WhatsApp client started!");
   clientInstance = client;
-  console.log("🤖 WhatsApp client connected and running!");
 
-  // Save session when available
-  client.onStateChanged(async (state) => {
-    if (state === "CONNECTED") {
-      const sessionData = await client.getSessionTokenBrowser();
-      saveSessionData(sessionData);
-    }
+  // Show QR in console if required
+  client.onQRCode((qr) => {
+    console.log("📲 Scan the QR below to log in:");
+    qrcode.generate(qr, { small: true });
   });
 
-  // Send queued messages
+  // Send any queued messages
   if (messageQueue.length > 0) {
     console.log(`🔄 Sending ${messageQueue.length} queued messages...`);
     messageQueue.forEach(({ number, message }) =>
@@ -100,12 +82,17 @@ function start(client) {
       await client.sendText(msg.from, "👋 Hello! I’m your Render WhatsApp bot!");
     }
   });
+
+  client.onStateChanged((state) => {
+    console.log("📡 WhatsApp connection state:", state);
+    if (state === "CONFLICT" || state === "UNLAUNCHED") client.forceRefocus();
+  });
 }
 
-// ---------- MESSAGE FUNCTION ----------
+/* ------------------ MESSAGE-SENDING FUNCTION ------------------ */
 async function sendWhatsAppMessage(number, message) {
   if (!clientInstance) {
-    console.log("⚠️ Client not ready, queuing message:", number);
+    console.log("⚠️ Client not ready, queuing message:", number, message);
     messageQueue.push({ number, message });
     return;
   }
@@ -116,11 +103,12 @@ async function sendWhatsAppMessage(number, message) {
     console.log(`✅ Message sent to ${number}: ${message}`);
   } catch (error) {
     console.error(`❌ Failed to send message to ${number}:`, error);
+    // Retry after 5 seconds
     setTimeout(() => sendWhatsAppMessage(number, message), 5000);
   }
 }
 
-// ---------- API ENDPOINT ----------
+/* ------------------ MESSAGE-SENDING API ------------------ */
 app.post("/send-message", async (req, res) => {
   const { number, message } = req.body;
 
@@ -134,5 +122,5 @@ app.post("/send-message", async (req, res) => {
   return res.json({ success: true, message: "Message queued or sent!" });
 });
 
-// ---------- SERVER LISTEN ----------
+/* ------------------ SERVER LISTEN ------------------ */
 app.listen(PORT, () => console.log(`🌍 Server running on port ${PORT}`));
