@@ -1,4 +1,3 @@
-
 const express = require("express");
 const { create } = require("@open-wa/wa-automate");
 const puppeteer = require("puppeteer");
@@ -30,13 +29,16 @@ app.get("/", (req, res) => res.send("✅ WhatsApp bot is running on Render"));
 
 let clientInstance = null;
 
+// Message queue for pending messages
+let messageQueue = [];
+
 /* ------------------ WHATSAPP AUTOMATE SETUP ------------------ */
 (async () => {
   const executablePath = puppeteer.executablePath();
 
   create({
     sessionId: "render-bot",
-    sessionDataPath: "./IGNORE_Session", // ✅ Custom session folder
+    sessionDataPath: "./IGNORE_Session",
     multiDevice: true,
     headless: true,
     useChrome: true,
@@ -58,11 +60,39 @@ function start(client) {
   console.log("🤖 WhatsApp client started!");
   clientInstance = client;
 
+  // Send any queued messages
+  if (messageQueue.length > 0) {
+    console.log(`🔄 Sending ${messageQueue.length} queued messages...`);
+    messageQueue.forEach(({ number, message }) =>
+      sendWhatsAppMessage(number, message)
+    );
+    messageQueue = [];
+  }
+
   client.onMessage(async (msg) => {
     if (msg.body.toLowerCase() === "hi") {
       await client.sendText(msg.from, "👋 Hello! I’m your Render WhatsApp bot!");
     }
   });
+}
+
+/* ------------------ MESSAGE-SENDING FUNCTION ------------------ */
+async function sendWhatsAppMessage(number, message) {
+  if (!clientInstance) {
+    console.log("⚠️ Client not ready, queuing message:", number, message);
+    messageQueue.push({ number, message });
+    return;
+  }
+
+  try {
+    const formattedNumber = number.includes("@c.us") ? number : `${number}@c.us`;
+    await clientInstance.sendText(formattedNumber, message);
+    console.log(`✅ Message sent to ${number}: ${message}`);
+  } catch (error) {
+    console.error(`❌ Failed to send message to ${number}:`, error);
+    // Retry after 5 seconds
+    setTimeout(() => sendWhatsAppMessage(number, message), 5000);
+  }
 }
 
 /* ------------------ MESSAGE-SENDING API ------------------ */
@@ -75,29 +105,9 @@ app.post("/send-message", async (req, res) => {
       .json({ success: false, error: "number and message are required" });
   }
 
-  if (!clientInstance) {
-    return res
-      .status(503)
-      .json({ success: false, error: "WhatsApp client not yet ready" });
-  }
-
-  try {
-    const formattedNumber = number.includes("@c.us")
-      ? number
-      : `${number}@c.us`;
-    await clientInstance.sendText(formattedNumber, message);
-    console.log(`✅ Message sent to ${number}: ${message}`);
-    return res.json({ success: true, message: "Message sent successfully!" });
-  } catch (error) {
-    console.error("❌ Error sending message:", error);
-    return res
-      .status(500)
-      .json({ success: false, error: error.message || "Failed to send" });
-  }
+  sendWhatsAppMessage(number, message);
+  return res.json({ success: true, message: "Message queued or sent!" });
 });
 
 /* ------------------ SERVER LISTEN ------------------ */
-app.listen(PORT, () =>
-  console.log(`🌍 Server running on port ${PORT}`)
-);
-
+app.listen(PORT, () => console.log(`🌍 Server running on port ${PORT}`));
